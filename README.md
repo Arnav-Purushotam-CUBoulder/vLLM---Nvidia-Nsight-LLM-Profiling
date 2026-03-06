@@ -64,19 +64,6 @@ The current plan covers a small slice of LLM inference profiling. The following 
 - Add experiments for streaming responses, dynamic batching, and long-context inference
 - Test additional open models and compare how architecture choices affect serving efficiency
 
-### 8. Push Toward Framework or Systems Contributions
-
-- Identify a small bottleneck in an open-source serving stack and propose or implement an improvement
-- Contribute a benchmark script, profiling note, or performance issue report upstream
-- Build a small extension in Python or C++ that improves observability or experiment reproducibility
-- Use this repository as a stepping stone toward CUDA-level or kernel-level investigation later
-
-### 9. Broaden the Scope Beyond Text-Only LLMs
-
-- Extend the benchmark methodology to a `VLM` or another generative model type
-- Compare how multimodal workloads shift memory use, latency, and GPU activity patterns
-- Reuse the same profiling workflow to study inference behavior outside text-only generation
-
 ## Status
 
 Initial repository scaffold. Implementation and experiment setup are in progress.
