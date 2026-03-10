@@ -1,0 +1,19 @@
+# SSH keys - never commit
+*.pem
+
+# AWS credentials and infra state
+infra/config.json
+
+# Benchmark results (commit selectively)
+results.json
+
+# Nsight traces (too large for git)
+*.nsys-rep
+*.sqlite
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store

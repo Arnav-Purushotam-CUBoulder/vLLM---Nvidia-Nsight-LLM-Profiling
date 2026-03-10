@@ -1,69 +1,118 @@
 # GPU LLM Inference Profiling with vLLM and NVIDIA Nsight
 
-This project documents a small, reproducible workflow for serving an LLM with `vLLM`, benchmarking inference performance, and profiling execution with `NVIDIA Nsight Systems`.
+Serve a small LLM (Phi-2) with vLLM on an NVIDIA GPU, benchmark inference performance under varying loads, and profile GPU execution with NVIDIA Nsight Systems.
 
-## Planned Scope
+## Setup
 
-- Run a small LLM through a Dockerized `vLLM` serving setup
-- Expose an OpenAI-compatible local or cloud-hosted inference endpoint
-- Benchmark throughput and latency across different prompt lengths and load levels
-- Capture and inspect Nsight Systems traces to study GPU activity and CPU-GPU overlap
-- Document the setup and experiment workflow for repeatable runs
+### Infrastructure
 
-## Why This Project
+- **Instance**: AWS EC2 g6.xlarge (NVIDIA L4, 24GB VRAM)
+- **AMI**: Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 22.04)
+- **Model**: Microsoft Phi-2 (2.7B parameters, ~6GB VRAM)
 
-This repository is intentionally scoped as a compact performance engineering project rather than a full inference framework contribution. The initial goal is to build a clean baseline for LLM serving, benchmarking, and profiling on an NVIDIA GPU, then use that baseline as a foundation for deeper optimization work.
+### First-Time Instance Setup
+
+SSH into your EC2 instance and run:
+
+```bash
+git clone <your-repo-url> ~/project && cd ~/project
+bash scripts/setup_instance.sh
+```
+
+This verifies GPU/Docker/Nsight and installs dependencies.
+
+## Usage
+
+### 1. Start the vLLM Server
+
+```bash
+bash scripts/run_server.sh
+```
+
+Wait ~60-90 seconds for the model to load, then verify:
+
+```bash
+bash scripts/test_server.sh
+```
+
+### 2. Run Benchmarks
+
+```bash
+python3 benchmark.py
+```
+
+This runs 6 test cases (short/long prompts x concurrency 1/4/8) and saves results to `results.json`.
+
+Options:
+```bash
+python3 benchmark.py --url http://localhost:8000 --output results.json
+```
+
+### 3. Profile with Nsight Systems
+
+Stop the Docker server first, then run vLLM under Nsight:
+
+```bash
+docker compose down
+bash scripts/profile_inference.sh
+```
+
+This captures a ~60s trace of GPU activity during inference. Copy the `.nsys-rep` file to your local machine and open in Nsight Systems GUI.
+
+## Benchmark Cases
+
+| Case | Prompt | Concurrency | Requests |
+|------|--------|-------------|----------|
+| short_prompt_c1 | Short | 1 | 10 |
+| short_prompt_c4 | Short | 4 | 16 |
+| short_prompt_c8 | Short | 8 | 16 |
+| long_prompt_c1 | Long | 1 | 10 |
+| long_prompt_c4 | Long | 4 | 16 |
+| long_prompt_c8 | Long | 8 | 16 |
+
+## What to Look For
+
+### Benchmarks
+- How does latency change with concurrency?
+- How does throughput improve (or stop improving) with more concurrent requests?
+- How does prompt length affect latency and throughput?
+
+### Nsight Profiling
+- Is the GPU busy or idle during inference?
+- Are there gaps between kernel launches?
+- Is there CPU-GPU overlap during token generation?
+- How does the timeline differ between short and long prompts?
+
+## Results
+
+_(To be filled after running experiments)_
+
+## Project Structure
+
+```
+.
+├── benchmark.py                 # Main benchmark script
+├── docker-compose.yml           # vLLM server config
+├── scripts/
+│   ├── run_server.sh            # Start vLLM in Docker
+│   ├── test_server.sh           # Quick server health check
+│   ├── setup_instance.sh        # One-time EC2 setup
+│   ├── profile_inference.sh     # Nsight Systems profiling
+│   └── profile_requests.py      # Send requests during profiling
+├── infra/
+│   ├── launch.sh                # Launch EC2 instance
+│   ├── stop.sh                  # Stop instance (preserve disk)
+│   ├── terminate.sh             # Terminate instance
+│   └── check-quota.sh           # Check GPU quota status
+├── results.json                 # Benchmark output (generated)
+└── README.md
+```
 
 ## Future Extensions
 
-The current plan covers a small slice of LLM inference profiling. The following extensions would push the project closer to the kind of work described in NVIDIA Deep Learning Software Engineer, LLM Performance roles.
-
-### 1. Broaden Beyond a Single Serving Stack
-
-- Compare the same model and workload across `vLLM`, `TensorRT-LLM`, `SGLang`, and `Triton`
-- Document framework-level tradeoffs in setup complexity, latency, throughput, memory usage, and batching behavior
-- Build a common benchmark harness so all frameworks are evaluated under the same test conditions
-
-### 2. Study Prefill, Decode, and KV Cache Behavior
-
-- Separate prompt processing (`prefill`) from token generation (`decode`) in benchmark results
-- Analyze how prompt length, output length, and concurrency affect `KV cache` growth and GPU memory pressure
-- Relate observed timeline behavior in Nsight Systems to concepts like cache reuse, request scheduling, and GPU occupancy
-
-### 3. Optimize for Multiple Performance Targets
-
-- Measure max throughput, minimum latency, and throughput under latency constraints
-- Add sweeps over concurrency, batch size, and generation length
-- Report not just average latency, but also tail metrics such as `p95` and `p99`
-- Explore simple service-level objective style questions such as "what is the highest throughput achievable while keeping latency below a chosen threshold?"
-
-### 4. Compare Across GPU Architectures
-
-- Repeat the same experiment on multiple NVIDIA accelerator types when available
-- Compare behavior on datacenter-style GPUs such as `L4`, `A10G`, or higher-end instances
-- Document how memory capacity, compute capability, and hardware generation influence LLM serving behavior
-
-### 5. Add Deeper Profiling and Performance Analysis
-
-- Use `Nsight Compute` for a more kernel-focused view in addition to `Nsight Systems`
-- Correlate high-level serving metrics with lower-level GPU execution details
-- Study GPU utilization gaps, CPU launch overhead, kernel launch frequency, and CPU-GPU overlap
-- Add lightweight performance modeling to explain where the system is likely compute-bound versus memory-bound
-
-### 6. Extend the Benchmarking Workflow
-
-- Save benchmark results in structured formats such as `CSV` or `JSON`
-- Generate plots for throughput-latency tradeoffs and prompt-length sensitivity
-- Add reproducible experiment configs so workloads can be rerun exactly
-- Include automated scripts for launching, profiling, parsing results, and exporting artifacts
-
-### 7. Expand Toward Real Inference Engineering
-
-- Profile and compare quantized versus non-quantized models
-- Evaluate tensor parallel or multi-GPU serving if larger infrastructure is available
-- Add experiments for streaming responses, dynamic batching, and long-context inference
-- Test additional open models and compare how architecture choices affect serving efficiency
-
-## Status
-
-Initial repository scaffold. Implementation and experiment setup are in progress.
+- Compare across serving frameworks (vLLM, TensorRT-LLM, SGLang)
+- Separate prefill vs decode latency
+- Profile KV cache memory growth under load
+- Use Nsight Compute for kernel-level analysis
+- Test quantized vs fp16 models
+- Multi-GPU / tensor parallel serving
