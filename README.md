@@ -47,6 +47,65 @@ Captured a GPU execution trace using NVIDIA Nsight Systems while serving a mixed
 
 The first request was slower (3.17s vs 0.44s for subsequent short requests) due to CUDA graph warmup and JIT compilation on the first inference pass. Subsequent requests of the same type show consistent latency.
 
+### GPU Kernel Breakdown
+
+Analysis of GPU compute time from the Nsight trace:
+
+| % GPU Time | Kernel | Role |
+|------------|--------|------|
+| 18.7% | `vectorized_elementwise_kernel` | Memory initialization, tensor zeroing |
+| 10.2% | `ampere_fp16_s16816gemm_256x128` | Matrix multiplication (GEMM) — core of transformer layers |
+| 8.1% | `gemvx::kernel` | Matrix-vector multiply — the decode step (one token at a time) |
+| 8.0% | `ampere_fp16_s1688gemm_128x128` | GEMM variant (different matrix dimensions) |
+| 7.5% | `flash_fwd_splitkv_kernel` | Flash Attention — attention computation over KV cache |
+| 5.6% | `ampere_fp16_s1688gemm_256x64` | GEMM variant |
+| 3.8% | `cutlass_tensorop_gemm_relu_256x128` | GEMM with fused ReLU activation |
+| 3.6% | `triton_` | Triton-compiled custom kernels (layer norm, fused ops) |
+| 3.5% | `cutlass_tensorop_gemm_relu_64x256` | GEMM+ReLU variant |
+
+GEMM (matrix multiplication) kernels collectively account for ~45% of GPU compute time. Flash Attention accounts for 7.5%. The decode-specific matrix-vector kernel (`gemvx`) ran 546 times across the 5 requests, confirming that single-token generation uses a fundamentally different (and less parallelizable) operation than batch processing.
+
+### Memory Transfer Analysis
+
+| Direction | % Transfer Time | Count | Purpose |
+|-----------|----------------|-------|---------|
+| Host to Device (CPU → GPU) | 97.4% | 3,591 | Model weights + input tokens |
+| Device to Device (GPU → GPU) | 2.5% | 1,757 | Internal tensor operations |
+| Device to Host (GPU → CPU) | 0.01% | 354 | Output tokens returned |
+
+Memory transfers are heavily asymmetric. Loading model weights to GPU dominates transfer time. Returning generated tokens to CPU is essentially free (354 transfers totaling 0.4ms).
+
+### CPU-GPU Interaction
+
+| CPU Activity | % Time | Meaning |
+|-------------|--------|---------|
+| `cudaEventSynchronize` | 36.5% | CPU waiting for GPU to finish |
+| `cudaLaunchKernel` | 27.8% | CPU dispatching work to GPU (44,131 kernel launches) |
+| `cudaMemcpyAsync` | 19.1% | CPU initiating data transfers |
+| `cudaDeviceSynchronize` | 12.7% | CPU waiting for all GPU work |
+
+The CPU spent 49.2% of its time waiting for the GPU, confirming the system is GPU-bound. The CPU can dispatch work faster than the GPU can execute it.
+
+### Nsight Profiling Observations
+
+**1. GEMM dominates GPU compute (~45%).**
+Matrix multiplication across feed-forward layers and attention projections is the most expensive operation, as expected for transformer inference.
+
+**2. Flash Attention is efficient at 7.5% of GPU time.**
+The optimized Flash Attention kernel keeps attention cost low relative to total compute. For larger models or longer sequences, this percentage would grow.
+
+**3. Decode uses matrix-vector multiply, not matrix-matrix.**
+The `gemvx` kernel (8.1% of GPU time, 546 calls) confirms that single-token generation processes one vector at a time rather than batched matrix operations. This is why decode is inherently sequential and why higher concurrency helps — it gives the GPU more vectors to process in parallel.
+
+**4. The system is GPU-bound, not CPU-bound.**
+CPU spent 49.2% of time waiting for the GPU. The CPU can launch 44,131 kernels (~2,200/sec) faster than the GPU can execute them.
+
+**5. Memory transfers are asymmetric — output is free.**
+97.4% of transfer time is loading data TO the GPU. Getting output tokens back costs 0.01% of transfer time. The bottleneck is never returning results.
+
+**6. vLLM uses CUDA graphs aggressively.**
+1,786 CUDA graphs were compiled during warmup, and 514 graph launches occurred during inference. CUDA graphs bundle many kernel launches into a single dispatch, reducing CPU-GPU round-trip overhead significantly.
+
 ## Setup
 
 ### Infrastructure
